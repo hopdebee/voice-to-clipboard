@@ -163,12 +163,18 @@ class App:
     def _prime_menu_geometry(self) -> None:
         """Work around Qt choosing a submenu's popup side from an uncomputed
         size hint on first open, which can overflow off-screen until the menu
-        is reopened. Rendering each menu once off-screen caches its geometry."""
-        for menu in [self.menu] + [a.menu() for a in self.menu.actions() if a.menu()]:
-            menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-            menu.show()
-            menu.hide()
-            menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
+        is reopened. sizeHint() forces the action-rect layout that popup
+        positioning reads. Never show() these menus here: the tray exports
+        them over DBus on KDE and showing them directly can crash the app.
+        """
+        try:
+            for action in self.menu.actions():
+                sub = action.menu()
+                if sub is not None:
+                    sub.sizeHint()
+            self.menu.sizeHint()
+        except Exception:
+            log.exception("menu geometry priming failed")  # cosmetic only
 
     def _update_tray(self) -> None:
         icon_state = self.state if self.enabled else "disabled"

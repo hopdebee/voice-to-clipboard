@@ -52,6 +52,9 @@ X session, mic, and GPU — contributions welcome). Manual smoke test:
    window running in a *separate process* (same-process windows block on the
    event loop and give false failures).
 3. Watch `~/.local/state/voice-to-clipboard/app.log` while testing.
+4. Never call `show()` on the tray menu or its submenus — KDE exports them
+   over DBus and showing them directly crashes the app (use `sizeHint()` to
+   warm geometry instead).
 
 ## Pull requests
 
