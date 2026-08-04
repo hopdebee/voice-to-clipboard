@@ -193,7 +193,7 @@ def format_table(
     if hw is not None:
         lines.append(hw.summary)
     lines += [
-        f"{'#':>3} {'fit':<4}{'WER%':>6} {'RTFx':>7}  {'backend':<15} model",
+        f"{'#':>3} {'fit':<4}{'WER%':>6} {'size':>6} {'RTFx':>7}  {'backend':<15} model",
         "-" * 100,
     ]
     for c in candidates:
@@ -205,8 +205,10 @@ def format_table(
             fit = {True: "✓", False: "✗", None: "?"}[supports(c, hw)]
         backend = c.backend or "—"
         rtfx = f"{c.rtfx:.0f}" if c.rtfx else "—"
+        size = f"{c.size_b:g}B" if c.size_b else "—"
         lines.append(
-            f"{c.rank:>3} {fit:<4}{c.wer:>6.2f} {rtfx:>7}  {backend:<15} {c.model_id}{marker}"
+            f"{c.rank:>3} {fit:<4}{c.wer:>6.2f} {size:>6} {rtfx:>7}  "
+            f"{backend:<15} {c.model_id}{marker}"
         )
         if not c.runnable:
             lines.append(f"{'':>25}  excluded: {c.note}")

@@ -8,7 +8,7 @@ import threading
 from pathlib import Path
 
 from PySide6.QtCore import QObject, Qt, QTimer, Signal
-from PySide6.QtGui import QAction, QActionGroup
+from PySide6.QtGui import QAction, QActionGroup, QColor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import __version__, clipboard, config, sounds
@@ -528,20 +528,26 @@ def build_leaderboard_dialog(candidates, hw, current_spec: str, on_pick):
             if not show_all and not (c.runnable and fit is not False):
                 continue
             rtfx = f", RTFx {c.rtfx:.0f}" if c.rtfx else ""
+            size = f", {c.size_b:g}B" if c.size_b else ""
             if c.runnable:
                 mark = {True: "✓ ", False: "  ", None: "? "}[fit]
                 current = "   ◀ current" if c.spec == current_spec else ""
                 untested = "  (untested)" if c.note.startswith("untested") else ""
                 text = (
                     f"#{c.rank}  {mark}{c.wer:.2f}%  {c.model_id}"
-                    f"  [{c.backend}{rtfx}]{untested}{current}"
+                    f"  [{c.backend}{size}{rtfx}]{untested}{current}"
                 )
                 if fit is False:
-                    size = f" ({c.size_b:g}B params)" if c.size_b else ""
-                    text += f" — too large for this machine{size}"
+                    text += " — too large for this machine"
             else:
-                text = f"#{c.rank}    {c.wer:.2f}%  {c.model_id} — {c.note}"
+                sized = f"  [{size[2:]}]" if size else ""
+                text = f"#{c.rank}    {c.wer:.2f}%  {c.model_id}{sized} — {c.note}"
             item = QListWidgetItem(text)
+            if c.spec == current_spec:
+                item.setForeground(QColor("#2ecc71"))
+                font = item.font()
+                font.setBold(True)
+                item.setFont(font)
             if not c.runnable or fit is False:
                 item.setFlags(Qt.ItemFlag.NoItemFlags)
             item.setData(Qt.ItemDataRole.UserRole, c)
