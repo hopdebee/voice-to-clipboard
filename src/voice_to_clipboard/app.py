@@ -103,13 +103,13 @@ class App:
         self.enabled_action = QAction("Enabled", checkable=True, checked=self.enabled)
         self.enabled_action.triggered.connect(self.set_enabled)
         self.menu.addAction(self.enabled_action)
-
-        self.status_action = QAction("...")
-        self.status_action.setEnabled(False)
-        self.menu.addAction(self.status_action)
         self.menu.addSeparator()
 
         model_menu = self.menu.addMenu("Model")
+        self.status_action = QAction("...")
+        self.status_action.setEnabled(False)
+        model_menu.addAction(self.status_action)
+        model_menu.addSeparator()
         group = QActionGroup(model_menu)
         group.setExclusive(True)
         for label, spec in self.cfg.favorites.items():
@@ -118,12 +118,13 @@ class App:
             act.triggered.connect(lambda _=False, s=spec: self.switch_model(s))
             group.addAction(act)
             model_menu.addAction(act)
+        model_menu.addSeparator()
 
         self.unload_action = QAction("Unload model (free VRAM)")
         self.unload_action.triggered.connect(self.toggle_model_loaded)
-        self.menu.addAction(self.unload_action)
+        model_menu.addAction(self.unload_action)
 
-        check_lb = self.menu.addAction("Check ASR leaderboard…")
+        check_lb = model_menu.addAction("Check ASR leaderboard…")
         check_lb.triggered.connect(self.check_leaderboard)
 
         set_hotkey = self.menu.addAction("Set hotkey…")
