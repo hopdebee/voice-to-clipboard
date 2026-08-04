@@ -158,6 +158,17 @@ class App:
         self.menu.addSeparator()
         quit_action = self.menu.addAction("Quit")
         quit_action.triggered.connect(self.quit)
+        self._prime_menu_geometry()
+
+    def _prime_menu_geometry(self) -> None:
+        """Work around Qt choosing a submenu's popup side from an uncomputed
+        size hint on first open, which can overflow off-screen until the menu
+        is reopened. Rendering each menu once off-screen caches its geometry."""
+        for menu in [self.menu] + [a.menu() for a in self.menu.actions() if a.menu()]:
+            menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            menu.show()
+            menu.hide()
+            menu.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, False)
 
     def _update_tray(self) -> None:
         icon_state = self.state if self.enabled else "disabled"
