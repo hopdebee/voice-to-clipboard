@@ -1,9 +1,11 @@
 """Speech-to-text backends.
 
-Two backends:
-  - "faster-whisper": CTranslate2-based, fastest. Model is a size alias
-    (large-v3, distil-large-v3.5, ...), a HF repo id containing a CTranslate2
-    conversion, or a local path.
+Three backends:
+  - "qwen-asr": Qwen3-ASR family via the transformers multimodal-LM API
+    (needs transformers >= 5.13). Top open-leaderboard accuracy; the default.
+  - "faster-whisper": CTranslate2-based Whisper, fastest Whisper option.
+    Model is a size alias (large-v3, distil-large-v3.5, ...), a HF repo id
+    containing a CTranslate2 conversion, or a local path.
   - "transformers": Hugging Face pipeline. Model is any HF repo id that works
     with the automatic-speech-recognition pipeline — this is the escape hatch
     for running brand-new models.
@@ -27,7 +29,8 @@ class Transcriber:
         self._lock = threading.Lock()
         self._backend = ""
         self._model_id = ""
-        self._model = None  # WhisperModel or transformers pipeline
+        self._model = None  # WhisperModel, transformers pipeline, or LM model
+        self._processor = None  # qwen-asr only
 
     @property
     def loaded_model(self) -> str:
@@ -52,6 +55,14 @@ class Transcriber:
                     dtype=torch.float16 if device == "cuda" else torch.float32,
                     device=0 if device == "cuda" else -1,
                 )
+            elif backend == "qwen-asr":
+                from transformers import AutoModelForMultimodalLM, AutoProcessor
+
+                self._processor = AutoProcessor.from_pretrained(model_id)
+                self._model = AutoModelForMultimodalLM.from_pretrained(
+                    model_id,
+                    dtype=torch.float16 if device == "cuda" else torch.float32,
+                ).to(device)
             else:
                 raise ValueError(f"unknown backend: {backend!r}")
             self._backend, self._model_id = backend, model_id
@@ -67,6 +78,7 @@ class Transcriber:
     def _unload_locked(self) -> None:
         if self._model is not None:
             self._model = None
+            self._processor = None
             gc.collect()
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
@@ -83,6 +95,15 @@ class Transcriber:
                     vad_filter=True,
                 )
                 text = " ".join(seg.text.strip() for seg in segments)
+            elif self._backend == "qwen-asr":
+                inputs = self._processor.apply_transcription_request(
+                    audio=audio, language=language or None
+                ).to(self._model.device, self._model.dtype)
+                output_ids = self._model.generate(**inputs, max_new_tokens=1024)
+                generated = output_ids[:, inputs["input_ids"].shape[1]:]
+                raw = self._processor.batch_decode(generated, skip_special_tokens=True)[0]
+                # output format: "language English<asr_text>the transcription"
+                text = raw.split("<asr_text>", 1)[-1]
             else:
                 kwargs = {}
                 if language:

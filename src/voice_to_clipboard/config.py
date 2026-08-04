@@ -8,6 +8,7 @@ CONFIG_DIR = Path.home() / ".config" / "voice-to-clipboard"
 CONFIG_PATH = CONFIG_DIR / "config.toml"
 
 DEFAULT_FAVORITES = {
+    "qwen3-asr-1.7b": "qwen-asr:Qwen/Qwen3-ASR-1.7B-hf",
     "large-v3 (fw)": "faster-whisper:large-v3",
     "large-v3-turbo (fw)": "faster-whisper:deepdml/faster-whisper-large-v3-turbo-ct2",
     "distil-large-v3.5 (fw)": "faster-whisper:distil-large-v3.5",
@@ -20,8 +21,8 @@ class Config:
     hotkey: str = "<ctrl>+<alt>+<space>"
     paste_hotkey: str = ""  # optional second hotkey: types result into the focused window
     mode: str = "toggle"  # "toggle" (press to start/stop) or "hold" (push-to-talk)
-    backend: str = "faster-whisper"  # "faster-whisper" or "transformers"
-    model: str = "large-v3"
+    backend: str = "qwen-asr"  # "qwen-asr", "faster-whisper", or "transformers"
+    model: str = "Qwen/Qwen3-ASR-1.7B-hf"
     language: str = ""  # empty = auto-detect
     device: str = "cuda"
     compute_type: str = "float16"  # faster-whisper only
@@ -77,12 +78,14 @@ paste_hotkey = "{cfg.paste_hotkey}"
 # Applies to both hotkeys.
 mode = "{cfg.mode}"
 
-# backend: "faster-whisper" (CTranslate2, fastest) or "transformers" (runs any
-# Hugging Face automatic-speech-recognition model)
+# backend: "qwen-asr" (Qwen3-ASR family, best accuracy), "faster-whisper"
+# (CTranslate2 Whisper, fastest Whisper), or "transformers" (any Hugging Face
+# automatic-speech-recognition pipeline model)
 backend = "{cfg.backend}"
 
-# model: for faster-whisper, a size name (large-v3, distil-large-v3.5, ...) or a
-# CTranslate2 model repo id / local path. For transformers, any HF ASR repo id.
+# model: qwen-asr -> a Qwen3-ASR "-hf" repo id (e.g. Qwen/Qwen3-ASR-1.7B-hf).
+# faster-whisper -> a size name (large-v3, distil-large-v3.5, ...) or a
+# CTranslate2 repo id / local path. transformers -> any HF ASR repo id.
 model = "{cfg.model}"
 
 # language: ISO code like "en", or "" for auto-detect

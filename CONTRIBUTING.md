@@ -23,7 +23,7 @@ A CUDA GPU is the default target, but `device = "cpu"` with
 | `app.py` | Qt tray app, state machine (idle → recording → busy), menu, signals |
 | `hotkey.py` | Global hotkey listeners (keyboard + mouse via pynput) and the "press to capture" flow |
 | `recorder.py` | Microphone capture (sounddevice, 16 kHz mono) |
-| `transcribe.py` | Model backends: faster-whisper and transformers |
+| `transcribe.py` | Model backends: qwen-asr, faster-whisper, and transformers |
 | `clipboard.py` | Delivery: xclip copy, or typing/pasting into the focused window |
 | `sounds.py` | Recording drone and result tones |
 | `config.py` | TOML config load/save |

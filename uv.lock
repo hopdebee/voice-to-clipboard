@@ -1524,5 +1524,5 @@ requires-dist = [
     { name = "pyside6", specifier = ">=6.7" },
     { name = "sounddevice", specifier = ">=0.4.6" },
     { name = "torch", specifier = ">=2.7", index = "https://download.pytorch.org/whl/cu128" },
-    { name = "transformers", specifier = ">=4.48" },
+    { name = "transformers", specifier = ">=5.13" },
 ]

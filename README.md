@@ -45,9 +45,10 @@ uv sync                              # creates .venv with all dependencies
 ```
 
 Press **Ctrl+Alt+Space**, say something, press it again — the text is on your
-clipboard. The default model (Whisper large-v3) downloads on first use
-(~3 GB). A soft 417 Hz om drone plays while recording so you always know the
-mic is live (`sounds = false` disables it).
+clipboard. The default model (Qwen3-ASR-1.7B, near the top of the
+[Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard))
+downloads on first use (~3.5 GB). A soft 417 Hz om drone plays while recording
+so you always know the mic is live (`sounds = false` disables it).
 
 The tray icon shows state: **blue** idle, **red** recording, **orange**
 transcribing, **gray/slashed** disabled.
@@ -88,8 +89,8 @@ config". Everything the tray can do, the file can too:
 hotkey = "<ctrl>+<alt>+<space>"  # or "mouse:button9", "<ctrl>+mouse:button8", "<f9>"
 paste_hotkey = ""                # optional 2nd hotkey: types into focused window
 mode = "toggle"                  # "toggle" = press twice; "hold" = push-to-talk
-backend = "faster-whisper"       # or "transformers"
-model = "large-v3"
+backend = "qwen-asr"             # or "faster-whisper", "transformers"
+model = "Qwen/Qwen3-ASR-1.7B-hf"
 language = ""                    # "" = auto-detect, or "en", "de", ...
 device = "cuda"                  # or "cpu"
 compute_type = "float16"         # faster-whisper only: float16, int8_float16, int8
@@ -103,16 +104,21 @@ sounds = true                    # om drone while recording + result tones
 
 ## Swapping in new models from Hugging Face
 
-Two backends:
+Three backends:
 
-- **faster-whisper** — CTranslate2, the fastest option. Accepts built-in size
-  aliases (`large-v3`, `distil-large-v3.5`, `turbo`, …), any HF repo
-  containing a CTranslate2 conversion (e.g.
+- **qwen-asr** — the Qwen3-ASR family (`Qwen/Qwen3-ASR-1.7B-hf`, …) via the
+  transformers multimodal-LM API. Best open-leaderboard accuracy (~4.98% avg
+  WER vs 6.55% for whisper-large-v3), 28 languages, and it returns an empty
+  string on silence instead of hallucinating. Needs `transformers >= 5.13`.
+- **faster-whisper** — CTranslate2, the fastest Whisper option. Accepts
+  built-in size aliases (`large-v3`, `distil-large-v3.5`, `turbo`, …), any HF
+  repo containing a CTranslate2 conversion (e.g.
   `deepdml/faster-whisper-large-v3-turbo-ct2`), or a local path.
 - **transformers** — runs **any** HF model compatible with the
   `automatic-speech-recognition` pipeline (new Whisper fine-tunes,
-  distil-whisper, CrisperWhisper, …). Slower than CTranslate2 but maximally
-  compatible — the escape hatch for models that dropped yesterday.
+  distil-whisper, CrisperWhisper, …). The escape hatch for models that
+  dropped yesterday. Note: models whose cards require `trust_remote_code`
+  are deliberately not supported.
 
 Add a line under `[models]` (`"Label" = "backend:model-id"`), tray → Reload
 config, pick it in the Model menu. It downloads to your HF cache on first
