@@ -127,22 +127,28 @@ class App:
         check_lb = model_menu.addAction("Check ASR leaderboard…")
         check_lb.triggered.connect(self.check_leaderboard)
 
-        set_hotkey = self.menu.addAction("Set hotkey…")
+        hotkey_menu = self.menu.addMenu("Hotkeys")
+        current = QAction(f"Copy hotkey: {self.cfg.hotkey}", hotkey_menu)
+        current.setEnabled(False)
+        hotkey_menu.addAction(current)
+        hotkey_menu.addSeparator()
+
+        set_hotkey = hotkey_menu.addAction("Set hotkey…")
         set_hotkey.triggered.connect(lambda: self.start_hotkey_capture("copy"))
 
         label = f"Set paste hotkey… ({self.cfg.paste_hotkey})" if self.cfg.paste_hotkey \
             else "Set paste hotkey… (off)"
-        set_paste = self.menu.addAction(label)
+        set_paste = hotkey_menu.addAction(label)
         set_paste.triggered.connect(lambda: self.start_hotkey_capture("paste"))
         if self.cfg.paste_hotkey:
-            disable_paste = self.menu.addAction("Disable paste hotkey")
+            disable_paste = hotkey_menu.addAction("Disable paste hotkey")
             disable_paste.triggered.connect(self.disable_paste_hotkey)
 
         self.ptt_action = QAction(
             "Push-to-talk (hold)", checkable=True, checked=self.cfg.mode == "hold"
         )
         self.ptt_action.triggered.connect(self.set_mode)
-        self.menu.addAction(self.ptt_action)
+        hotkey_menu.addAction(self.ptt_action)
 
         self.menu.addSeparator()
         open_cfg = self.menu.addAction("Open config file")
