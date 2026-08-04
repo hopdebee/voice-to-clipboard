@@ -28,6 +28,7 @@ A CUDA GPU is the default target, but `device = "cpu"` with
 | `sounds.py` | Recording drone and result tones |
 | `config.py` | TOML config load/save |
 | `service.py` | systemd user service install/uninstall |
+| `leaderboard.py` | Open ASR Leaderboard fetch/ranking and backend compatibility rules |
 | `icons.py` | Tray icons drawn with QPainter |
 
 Threading model: Qt main loop owns all UI. pynput listeners and transcription

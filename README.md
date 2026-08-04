@@ -124,6 +124,20 @@ Add a line under `[models]` (`"Label" = "backend:model-id"`), tray → Reload
 config, pick it in the Model menu. It downloads to your HF cache on first
 load.
 
+### Leaderboard check
+
+Tray → **"Check ASR leaderboard…"** (or `voice-to-clipboard
+--check-leaderboard` in a terminal) fetches the latest
+[Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)
+results — the same CSV the public leaderboard renders, ranked by "avg
+cleaned" English WER — and shows which models this app can actually run.
+Entries are excluded, with the reason shown, when they are proprietary/API-only,
+require `trust_remote_code`, or lack a standard transformers loader. Pick a
+runnable model in the dialog to switch to it and add it to your favorites;
+models marked *(untested)* have a compatible pipeline tag but an architecture
+we haven't verified — if one fails to load you'll get a notification and can
+switch back.
+
 ## Troubleshooting
 
 - **No tray icon** — your desktop needs a StatusNotifier-capable tray (KDE,

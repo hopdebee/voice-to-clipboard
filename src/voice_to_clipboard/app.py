@@ -7,7 +7,7 @@ import sys
 import threading
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QTimer, Signal
+from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
@@ -31,6 +31,7 @@ class Bridge(QObject):
     failed = Signal(str)
     model_state = Signal(str)  # "loading" | "ready" | "error: ..."
     hotkey_captured = Signal(object)  # str spec, or None if cancelled
+    leaderboard_ready = Signal(object)  # list[Candidate], or str error message
 
 
 class App:
@@ -47,6 +48,9 @@ class App:
         self.bridge.failed.connect(self.on_failed)
         self.bridge.model_state.connect(self.on_model_state)
         self.bridge.hotkey_captured.connect(self.on_hotkey_captured)
+        self.bridge.leaderboard_ready.connect(self.on_leaderboard_ready)
+        self._leaderboard_busy = False
+        self._leaderboard_dialog = None
 
         self.recorder = Recorder()
         self.transcriber = Transcriber()
@@ -118,6 +122,9 @@ class App:
         self.unload_action = QAction("Unload model (free VRAM)")
         self.unload_action.triggered.connect(self.toggle_model_loaded)
         self.menu.addAction(self.unload_action)
+
+        check_lb = self.menu.addAction("Check ASR leaderboard…")
+        check_lb.triggered.connect(self.check_leaderboard)
 
         set_hotkey = self.menu.addAction("Set hotkey…")
         set_hotkey.triggered.connect(lambda: self.start_hotkey_capture("copy"))
@@ -308,6 +315,44 @@ class App:
         config.save(self.cfg)
         self._load_model_async()
 
+    # ---------- leaderboard ----------
+
+    def check_leaderboard(self) -> None:
+        if self._leaderboard_busy:
+            return
+        self._leaderboard_busy = True
+        self.notify("ASR leaderboard", "Fetching latest results…")
+
+        def work() -> None:
+            try:
+                from . import leaderboard
+
+                self.bridge.leaderboard_ready.emit(leaderboard.fetch_ranked())
+            except Exception as e:
+                log.exception("leaderboard fetch failed")
+                self.bridge.leaderboard_ready.emit(str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_leaderboard_ready(self, result: object) -> None:
+        self._leaderboard_busy = False
+        if isinstance(result, str):
+            self.notify("Leaderboard check failed", result, error=True)
+            return
+        self._leaderboard_dialog = build_leaderboard_dialog(
+            result, self.cfg.backend_model, self._use_leaderboard_model
+        )
+        self._leaderboard_dialog.show()
+        self._leaderboard_dialog.raise_()
+        self._leaderboard_dialog.activateWindow()
+
+    def _use_leaderboard_model(self, candidate) -> None:
+        label = candidate.model_id.rsplit("/", 1)[-1]
+        self.cfg.favorites.setdefault(label, candidate.spec)
+        self.switch_model(candidate.spec)  # sets backend/model, saves, loads
+        self._build_menu()
+        self.notify("Model switched", f"{candidate.model_id} ({candidate.wer:.2f}% WER)")
+
     # ---------- hotkey capture ----------
 
     def start_hotkey_capture(self, kind: str) -> None:
@@ -433,6 +478,70 @@ class App:
         self.qapp.quit()
 
 
+def build_leaderboard_dialog(candidates, current_spec: str, on_pick):
+    """Dialog listing Open ASR Leaderboard entries; runnable ones are selectable."""
+    from PySide6.QtWidgets import (
+        QDialog,
+        QHBoxLayout,
+        QLabel,
+        QListWidget,
+        QListWidgetItem,
+        QPushButton,
+        QVBoxLayout,
+    )
+
+    dialog = QDialog()
+    dialog.setWindowTitle("Open ASR Leaderboard — English (avg cleaned WER)")
+    dialog.resize(720, 480)
+    layout = QVBoxLayout(dialog)
+    layout.addWidget(
+        QLabel(
+            "Same ranking as the public leaderboard. Grayed-out entries can't be "
+            "run by this app (proprietary, trust_remote_code, or no standard loader)."
+        )
+    )
+    lst = QListWidget()
+    for c in candidates:
+        rtfx = f", RTFx {c.rtfx:.0f}" if c.rtfx else ""
+        if c.runnable:
+            current = "   ✓ current" if c.spec == current_spec else ""
+            untested = "  (untested)" if c.note.startswith("untested") else ""
+            text = f"#{c.rank}  {c.wer:.2f}%  {c.model_id}  [{c.backend}{rtfx}]{untested}{current}"
+        else:
+            text = f"#{c.rank}  {c.wer:.2f}%  {c.model_id} — {c.note}"
+        item = QListWidgetItem(text)
+        if not c.runnable:
+            item.setFlags(Qt.ItemFlag.NoItemFlags)
+        item.setData(Qt.ItemDataRole.UserRole, c)
+        lst.addItem(item)
+    layout.addWidget(lst)
+
+    buttons = QHBoxLayout()
+    use_btn = QPushButton("Use selected model")
+    use_btn.setEnabled(False)
+    close_btn = QPushButton("Close")
+    buttons.addWidget(use_btn)
+    buttons.addStretch()
+    buttons.addWidget(close_btn)
+    layout.addLayout(buttons)
+
+    def selection_changed() -> None:
+        item = lst.currentItem()
+        c = item.data(Qt.ItemDataRole.UserRole) if item else None
+        use_btn.setEnabled(bool(c and c.runnable and c.spec != current_spec))
+
+    def use_selected() -> None:
+        c = lst.currentItem().data(Qt.ItemDataRole.UserRole)
+        dialog.accept()
+        on_pick(c)
+
+    lst.currentItemChanged.connect(selection_changed)
+    lst.itemDoubleClicked.connect(lambda _item: use_btn.isEnabled() and use_selected())
+    use_btn.clicked.connect(use_selected)
+    close_btn.clicked.connect(dialog.reject)
+    return dialog
+
+
 def _setup_logging() -> None:
     state_dir = Path.home() / ".local" / "state" / "voice-to-clipboard"
     state_dir.mkdir(parents=True, exist_ok=True)
@@ -449,6 +558,13 @@ def _setup_logging() -> None:
 def main() -> int:
     if "--version" in sys.argv:
         print(f"voice-to-clipboard {__version__}")
+        return 0
+    if "--check-leaderboard" in sys.argv:
+        from . import leaderboard
+
+        cfg = config.load()
+        candidates = leaderboard.fetch_ranked()
+        print(leaderboard.format_table(candidates, cfg.backend_model))
         return 0
     if "--install-service" in sys.argv:
         from . import service
