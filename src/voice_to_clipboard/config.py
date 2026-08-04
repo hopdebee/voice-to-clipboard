@@ -9,6 +9,7 @@ CONFIG_PATH = CONFIG_DIR / "config.toml"
 
 DEFAULT_FAVORITES = {
     "qwen3-asr-1.7b": "qwen-asr:Qwen/Qwen3-ASR-1.7B-hf",
+    "granite-4.1-2b": "granite-speech:ibm-granite/granite-speech-4.1-2b",
     "large-v3 (fw)": "faster-whisper:large-v3",
     "large-v3-turbo (fw)": "faster-whisper:deepdml/faster-whisper-large-v3-turbo-ct2",
     "distil-large-v3.5 (fw)": "faster-whisper:distil-large-v3.5",
@@ -21,7 +22,7 @@ class Config:
     hotkey: str = "<ctrl>+<alt>+<space>"
     paste_hotkey: str = ""  # optional second hotkey: types result into the focused window
     mode: str = "toggle"  # "toggle" (press to start/stop) or "hold" (push-to-talk)
-    backend: str = "qwen-asr"  # "qwen-asr", "faster-whisper", or "transformers"
+    backend: str = "qwen-asr"  # qwen-asr | granite-speech | faster-whisper | transformers
     model: str = "Qwen/Qwen3-ASR-1.7B-hf"
     language: str = ""  # empty = auto-detect
     device: str = "cuda"
@@ -81,9 +82,9 @@ paste_hotkey = "{cfg.paste_hotkey}"
 # Applies to both hotkeys.
 mode = "{cfg.mode}"
 
-# backend: "qwen-asr" (Qwen3-ASR family, best accuracy), "faster-whisper"
-# (CTranslate2 Whisper, fastest Whisper), or "transformers" (any Hugging Face
-# automatic-speech-recognition pipeline model)
+# backend: "qwen-asr" (Qwen3-ASR family, best accuracy), "granite-speech"
+# (IBM granite-speech family), "faster-whisper" (CTranslate2 Whisper, fastest
+# Whisper), or "transformers" (any HF automatic-speech-recognition pipeline model)
 backend = "{cfg.backend}"
 
 # model: qwen-asr -> a Qwen3-ASR "-hf" repo id (e.g. Qwen/Qwen3-ASR-1.7B-hf).

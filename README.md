@@ -105,12 +105,16 @@ record_tone = false              # 417 Hz om drone while recording
 
 ## Swapping in new models from Hugging Face
 
-Three backends:
+Four backends:
 
 - **qwen-asr** — the Qwen3-ASR family (`Qwen/Qwen3-ASR-1.7B-hf`, …) via the
   transformers multimodal-LM API. Best open-leaderboard accuracy (~4.98% avg
   WER vs 6.55% for whisper-large-v3), 28 languages, and it returns an empty
   string on silence instead of hallucinating. Needs `transformers >= 5.13`.
+- **granite-speech** — the IBM granite-speech family
+  (`ibm-granite/granite-speech-4.1-2b`, …) via its chat-template API
+  (~4.90% avg WER). A Silero VAD gate guards all non-whisper backends against
+  hallucinating text from silence or mic noise.
 - **faster-whisper** — CTranslate2, the fastest Whisper option. Accepts
   built-in size aliases (`large-v3`, `distil-large-v3.5`, `turbo`, …), any HF
   repo containing a CTranslate2 conversion (e.g.
@@ -132,12 +136,16 @@ Tray → **"Check ASR leaderboard…"** (or `voice-to-clipboard
 [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard)
 results — the same CSV the public leaderboard renders, ranked by "avg
 cleaned" English WER — and shows which models this app can actually run.
-Entries are excluded, with the reason shown, when they are proprietary/API-only,
-require `trust_remote_code`, or lack a standard transformers loader. Pick a
-runnable model in the dialog to switch to it and add it to your favorites;
-models marked *(untested)* have a compatible pipeline tag but an architecture
-we haven't verified — if one fails to load you'll get a notification and can
-switch back.
+
+By default the dialog shows **only models you can select on this machine**:
+proprietary/API-only entries, models requiring `trust_remote_code`, and
+models without a standard loader are hidden ("Show full leaderboard" reveals
+them with the exclusion reason). The app also detects your hardware — with a
+GPU, models that fit your VRAM get a ✓; without one, only CPU-sized models
+(≤1B params) are offered. Pick a model to switch to it and add it to your
+favorites; models marked *(untested)* have a compatible pipeline tag but an
+architecture we haven't verified — if one fails to load you'll get a
+notification and can switch back.
 
 ## Troubleshooting
 

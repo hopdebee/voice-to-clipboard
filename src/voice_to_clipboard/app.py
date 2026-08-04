@@ -334,7 +334,9 @@ class App:
             try:
                 from . import leaderboard
 
-                self.bridge.leaderboard_ready.emit(leaderboard.fetch_ranked())
+                self.bridge.leaderboard_ready.emit(
+                    (leaderboard.fetch_ranked(), leaderboard.detect_hardware())
+                )
             except Exception as e:
                 log.exception("leaderboard fetch failed")
                 self.bridge.leaderboard_ready.emit(str(e))
@@ -346,8 +348,9 @@ class App:
         if isinstance(result, str):
             self.notify("Leaderboard check failed", result, error=True)
             return
+        candidates, hw = result
         self._leaderboard_dialog = build_leaderboard_dialog(
-            result, self.cfg.backend_model, self._use_leaderboard_model
+            candidates, hw, self.cfg.backend_model, self._use_leaderboard_model
         )
         self._leaderboard_dialog.show()
         self._leaderboard_dialog.raise_()
@@ -489,8 +492,12 @@ class App:
         self.qapp.quit()
 
 
-def build_leaderboard_dialog(candidates, current_spec: str, on_pick):
-    """Dialog listing Open ASR Leaderboard entries; runnable ones are selectable."""
+def build_leaderboard_dialog(candidates, hw, current_spec: str, on_pick):
+    """Dialog listing Open ASR Leaderboard entries; runnable ones are selectable.
+
+    By default only models this app can run on this machine are shown; the
+    "Show full leaderboard" toggle reveals everything with exclusion reasons.
+    """
     from PySide6.QtWidgets import (
         QDialog,
         QHBoxLayout,
@@ -501,51 +508,72 @@ def build_leaderboard_dialog(candidates, current_spec: str, on_pick):
         QVBoxLayout,
     )
 
+    from .leaderboard import supports
+
     dialog = QDialog()
     dialog.setWindowTitle("Open ASR Leaderboard — English (avg cleaned WER)")
-    dialog.resize(720, 480)
+    dialog.resize(760, 500)
     layout = QVBoxLayout(dialog)
+    layout.addWidget(QLabel(hw.summary))
     layout.addWidget(
-        QLabel(
-            "Same ranking as the public leaderboard. Grayed-out entries can't be "
-            "run by this app (proprietary, trust_remote_code, or no standard loader)."
-        )
+        QLabel("✓ = fits this machine. Grayed-out entries can't be selected here.")
     )
     lst = QListWidget()
-    for c in candidates:
-        rtfx = f", RTFx {c.rtfx:.0f}" if c.rtfx else ""
-        if c.runnable:
-            current = "   ✓ current" if c.spec == current_spec else ""
-            untested = "  (untested)" if c.note.startswith("untested") else ""
-            text = f"#{c.rank}  {c.wer:.2f}%  {c.model_id}  [{c.backend}{rtfx}]{untested}{current}"
-        else:
-            text = f"#{c.rank}  {c.wer:.2f}%  {c.model_id} — {c.note}"
-        item = QListWidgetItem(text)
-        if not c.runnable:
-            item.setFlags(Qt.ItemFlag.NoItemFlags)
-        item.setData(Qt.ItemDataRole.UserRole, c)
-        lst.addItem(item)
     layout.addWidget(lst)
 
+    def populate(show_all: bool) -> None:
+        lst.clear()
+        for c in candidates:
+            fit = supports(c, hw) if c.runnable else None
+            if not show_all and not (c.runnable and fit is not False):
+                continue
+            rtfx = f", RTFx {c.rtfx:.0f}" if c.rtfx else ""
+            if c.runnable:
+                mark = {True: "✓ ", False: "  ", None: "? "}[fit]
+                current = "   ◀ current" if c.spec == current_spec else ""
+                untested = "  (untested)" if c.note.startswith("untested") else ""
+                text = (
+                    f"#{c.rank}  {mark}{c.wer:.2f}%  {c.model_id}"
+                    f"  [{c.backend}{rtfx}]{untested}{current}"
+                )
+                if fit is False:
+                    size = f" ({c.size_b:g}B params)" if c.size_b else ""
+                    text += f" — too large for this machine{size}"
+            else:
+                text = f"#{c.rank}    {c.wer:.2f}%  {c.model_id} — {c.note}"
+            item = QListWidgetItem(text)
+            if not c.runnable or fit is False:
+                item.setFlags(Qt.ItemFlag.NoItemFlags)
+            item.setData(Qt.ItemDataRole.UserRole, c)
+            lst.addItem(item)
+
+    populate(show_all=False)
+
     buttons = QHBoxLayout()
+    show_all_btn = QPushButton("Show full leaderboard")
+    show_all_btn.setCheckable(True)
     use_btn = QPushButton("Use selected model")
     use_btn.setEnabled(False)
     close_btn = QPushButton("Close")
-    buttons.addWidget(use_btn)
+    buttons.addWidget(show_all_btn)
     buttons.addStretch()
+    buttons.addWidget(use_btn)
     buttons.addWidget(close_btn)
     layout.addLayout(buttons)
 
     def selection_changed() -> None:
         item = lst.currentItem()
         c = item.data(Qt.ItemDataRole.UserRole) if item else None
-        use_btn.setEnabled(bool(c and c.runnable and c.spec != current_spec))
+        use_btn.setEnabled(
+            bool(c and c.runnable and supports(c, hw) is not False and c.spec != current_spec)
+        )
 
     def use_selected() -> None:
         c = lst.currentItem().data(Qt.ItemDataRole.UserRole)
         dialog.accept()
         on_pick(c)
 
+    show_all_btn.toggled.connect(populate)
     lst.currentItemChanged.connect(selection_changed)
     lst.itemDoubleClicked.connect(lambda _item: use_btn.isEnabled() and use_selected())
     use_btn.clicked.connect(use_selected)
@@ -575,7 +603,8 @@ def main() -> int:
 
         cfg = config.load()
         candidates = leaderboard.fetch_ranked()
-        print(leaderboard.format_table(candidates, cfg.backend_model))
+        hw = leaderboard.detect_hardware()
+        print(leaderboard.format_table(candidates, cfg.backend_model, hw))
         return 0
     if "--install-service" in sys.argv:
         from . import service
