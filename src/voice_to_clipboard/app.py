@@ -358,7 +358,11 @@ class App:
         self.cfg.favorites.setdefault(label, candidate.spec)
         self.switch_model(candidate.spec)  # sets backend/model, saves, loads
         self._build_menu()
-        self.notify("Model switched", f"{candidate.model_id} ({candidate.wer:.2f}% WER)")
+        self.notify(
+            "Model switched",
+            f"{candidate.model_id} ({candidate.wer:.2f}% WER) — downloading on "
+            "first use; watch the Model menu status",
+        )
 
     # ---------- hotkey capture ----------
 

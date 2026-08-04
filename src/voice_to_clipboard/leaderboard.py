@@ -85,6 +85,10 @@ def _classify(model_id: str, license_name: str) -> tuple[str | None, str]:
         return "qwen-asr", "verified backend"
     if model_type == "whisper":
         return "transformers", "whisper architecture"
+    if model_type == "granite_speech":
+        # loads, but its feature extractor rejects the generic ASR pipeline's
+        # sampling_rate argument (verified 2026-08); needs a dedicated backend
+        return None, "incompatible with the transformers ASR pipeline"
     if "ctranslate2" in tags:
         return "faster-whisper", "CTranslate2 conversion"
     if library == "transformers" and pipeline == "automatic-speech-recognition":

@@ -21,6 +21,7 @@ dependencies = [
     "numpy",
     "faster-whisper>=1.1",
     "torch>=2.7",
+    "torchaudio>=2.7",
     "transformers>=5.13",
 ]
 
@@ -47,6 +48,7 @@ packages = ["src/voice_to_clipboard"]
 
 [tool.uv.sources]
 torch = { index = "pytorch-cu128" }
+torchaudio = { index = "pytorch-cu128" }
 
 [[tool.uv.index]]
 name = "pytorch-cu128"
