@@ -4,11 +4,10 @@ from PySide6.QtCore import QRectF, Qt
 from PySide6.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
 
 STATE_COLORS = {
-    "idle": "#3daee9",       # KDE blue
+    "idle": "#9b59b6",       # purple
     "recording": "#e93d3d",  # red
     "busy": "#e9a13d",       # orange
     "disabled": "#777777",   # gray
-    "error": "#8e44ad",      # purple
 }
 
 

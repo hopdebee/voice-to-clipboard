@@ -27,7 +27,8 @@ class Config:
     device: str = "cuda"
     compute_type: str = "float16"  # faster-whisper only
     max_seconds: int = 120
-    sounds: bool = True
+    sounds: bool = True  # success/error result tones
+    record_tone: bool = False  # 417 Hz om drone while recording
     favorites: dict[str, str] = field(default_factory=lambda: dict(DEFAULT_FAVORITES))
 
     @property
@@ -52,6 +53,8 @@ def load() -> Config:
         cfg.max_seconds = int(raw["max_seconds"])
     if "sounds" in raw:
         cfg.sounds = bool(raw["sounds"])
+    if "record_tone" in raw:
+        cfg.record_tone = bool(raw["record_tone"])
     if isinstance(raw.get("models"), dict):
         cfg.favorites = {str(k): str(v) for k, v in raw["models"].items()}
     return cfg
@@ -94,7 +97,8 @@ language = "{cfg.language}"
 device = "{cfg.device}"
 compute_type = "{cfg.compute_type}"   # faster-whisper only: float16, int8_float16, int8
 max_seconds = {cfg.max_seconds}       # auto-stop recording after this long
-sounds = {str(cfg.sounds).lower()}    # om drone while recording + result tones
+sounds = {str(cfg.sounds).lower()}         # success/error result tones
+record_tone = {str(cfg.record_tone).lower()}   # 417 Hz om drone while recording
 
 # Favorites shown in the tray menu. Format: label = "backend:model"
 # Labels are free-form — keep them short so the menu doesn't get cut off.

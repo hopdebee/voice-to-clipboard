@@ -214,7 +214,7 @@ class App:
             return
         self.state = "recording"
         self.max_timer.start(self.cfg.max_seconds * 1000)
-        if self.cfg.sounds:
+        if self.cfg.record_tone:
             sounds.start_drone()
         self._update_tray()
 

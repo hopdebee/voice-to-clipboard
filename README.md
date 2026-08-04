@@ -47,10 +47,10 @@ uv sync                              # creates .venv with all dependencies
 Press **Ctrl+Alt+Space**, say something, press it again — the text is on your
 clipboard. The default model (Qwen3-ASR-1.7B, near the top of the
 [Open ASR Leaderboard](https://huggingface.co/spaces/hf-audio/open_asr_leaderboard))
-downloads on first use (~3.5 GB). A soft 417 Hz om drone plays while recording
-so you always know the mic is live (`sounds = false` disables it).
+downloads on first use (~3.5 GB). Optionally, a soft 417 Hz om drone can play
+while recording so you always know the mic is live (`record_tone = true`).
 
-The tray icon shows state: **blue** idle, **red** recording, **orange**
+The tray icon shows state: **purple** idle, **red** recording, **orange**
 transcribing, **gray/slashed** disabled.
 
 ## Run as a service
@@ -95,7 +95,8 @@ language = ""                    # "" = auto-detect, or "en", "de", ...
 device = "cuda"                  # or "cpu"
 compute_type = "float16"         # faster-whisper only: float16, int8_float16, int8
 max_seconds = 120                # auto-stop safety limit
-sounds = true                    # om drone while recording + result tones
+sounds = true                    # success/error result tones
+record_tone = false              # 417 Hz om drone while recording
 
 [models]                         # favorites shown in the tray menu (keep labels short)
 "large-v3 (fw)" = "faster-whisper:large-v3"
