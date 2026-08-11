@@ -11,7 +11,7 @@ from PySide6.QtCore import QObject, Qt, QTimer, Signal
 from PySide6.QtGui import QAction, QActionGroup, QColor
 from PySide6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
-from . import __version__, clipboard, config, sounds
+from . import __version__, clipboard, codex_micro, config, sounds, update
 from .hotkey import HotkeyCapture, HotkeyListener
 from .icons import make_icon
 from .recorder import SAMPLE_RATE, Recorder
@@ -20,6 +20,8 @@ from .transcribe import Transcriber
 log = logging.getLogger(__name__)
 
 MIN_AUDIO_SECONDS = 0.3
+# Delay of the automatic update check, to keep it off the busy startup path.
+UPDATE_CHECK_DELAY_MS = 5000
 
 
 class Bridge(QObject):
@@ -32,6 +34,13 @@ class Bridge(QObject):
     model_state = Signal(str)  # "loading" | "ready" | "error: ..."
     hotkey_captured = Signal(object)  # str spec, or None if cancelled
     leaderboard_ready = Signal(object)  # list[Candidate], or str error message
+    update_checked = Signal(object)  # update.Release, None (no releases), or str error
+    update_status = Signal(object)  # (title, message, error) from the update worker
+    update_finished = Signal(bool)  # True if the checkout was updated
+    device_pick_model = Signal(int)  # Codex Micro agent-key slot 0-5
+    device_set_mode = Signal(str)  # "toggle" | "hold"
+    device_set_delivery = Signal(str)  # "clipboard" | "type"
+    device_presence = Signal(str)  # hidraw path, or "" when disconnected
 
 
 class App:
@@ -49,8 +58,24 @@ class App:
         self.bridge.model_state.connect(self.on_model_state)
         self.bridge.hotkey_captured.connect(self.on_hotkey_captured)
         self.bridge.leaderboard_ready.connect(self.on_leaderboard_ready)
+        self.bridge.update_checked.connect(self.on_update_checked)
+        self.bridge.update_status.connect(self.on_update_status)
+        self.bridge.update_finished.connect(self.on_update_finished)
+        self.bridge.device_pick_model.connect(self.on_device_pick_model)
+        self.bridge.device_set_mode.connect(self.on_device_set_mode)
+        self.bridge.device_set_delivery.connect(self.on_device_set_delivery)
+        self.bridge.device_presence.connect(self.on_device_presence)
         self._leaderboard_busy = False
         self._leaderboard_dialog = None
+        self._update_state = "idle"  # idle | checking | installing
+        self._update_release: update.Release | None = None
+        self._update_line = ""  # disabled menu line describing the last check
+        self._update_announce = False  # report "up to date" / failures too
+        # Declared before the tray is built: _update_tray() pushes state to the
+        # device and runs once during construction, before _start_device().
+        self.device: codex_micro.CodexMicroController | None = None
+        self.device_action: QAction | None = None
+        self.device_path = ""
 
         self.recorder = Recorder()
         self.transcriber = Transcriber()
@@ -86,7 +111,92 @@ class App:
             except Exception as e:
                 log.exception("bad hotkey in config")
                 self.notify("Invalid hotkey", f"{spec!r}: {e}", error=True)
+        self._start_device()
         self._load_model_async()
+        # Quiet startup check so an available release shows up in the menu
+        # without the user going looking for it.
+        QTimer.singleShot(UPDATE_CHECK_DELAY_MS, self.check_update)
+
+    # ---------- Codex Micro ----------
+
+    def _start_device(self) -> None:
+        """Bring up the Codex Micro controller. A missing device is a no-op."""
+        if self.device is not None:
+            self.device.stop()
+            self.device = None
+        if not self.cfg.codex_micro.enabled:
+            return
+        source = "paste" if self.cfg.codex_micro.trigger_delivery == "type" else "copy"
+        self.device = codex_micro.CodexMicroController(
+            self.cfg.codex_micro,
+            on_trigger=lambda: self.bridge.hotkey.emit(source),
+            on_release=lambda: self.bridge.hotkey_released.emit(source),
+            on_pick_model=self.bridge.device_pick_model.emit,
+            on_set_mode=self.bridge.device_set_mode.emit,
+            on_set_delivery=self.bridge.device_set_delivery.emit,
+            on_presence=self.bridge.device_presence.emit,
+        )
+        self.device.start()
+
+    def _update_device(self) -> None:
+        if self.device is None:
+            return
+        specs = list(self.cfg.favorites.values())
+        try:
+            index = specs.index(self.cfg.backend_model)
+        except ValueError:
+            index = -1
+        self.device.update(
+            state=self.state,
+            enabled=self.enabled,
+            model_status=self.model_status,
+            model_index=index,
+            model_count=len(specs),
+            mode=self.cfg.mode,
+            delivery=self.cfg.codex_micro.trigger_delivery,
+        )
+
+    def on_device_presence(self, path: str) -> None:
+        self.device_path = path
+        if path:
+            log.info("Codex Micro available at %s", path)
+        self._update_tray()
+
+    def on_device_pick_model(self, slot: int) -> None:
+        specs = list(self.cfg.favorites.items())
+        if not 0 <= slot < len(specs):
+            return
+        label, spec = specs[slot]
+        if spec == self.cfg.backend_model:
+            return
+        self.switch_model(spec)
+        self._build_menu()
+        self.notify("Model switched", f"{label} (Codex Micro key {slot + 1})")
+
+    def on_device_set_mode(self, mode: str) -> None:
+        if mode == self.cfg.mode:
+            return
+        self.cfg.mode = mode
+        config.save(self.cfg)
+        self._build_menu()
+        self._update_tray()
+        self.notify("Trigger mode", "push-to-talk" if mode == "hold" else "toggle")
+
+    def on_device_set_delivery(self, delivery: str) -> None:
+        if delivery == self.cfg.codex_micro.trigger_delivery:
+            return
+        self.cfg.codex_micro.trigger_delivery = delivery
+        config.save(self.cfg)
+        self._start_device_delivery_refresh()
+        self.notify(
+            "Codex Micro delivery",
+            "types into the focused window" if delivery == "type" else "copies to clipboard",
+        )
+
+    def _start_device_delivery_refresh(self) -> None:
+        """Delivery decides which hotkey source the trigger emits, so rebind it."""
+        self._start_device()
+        self._update_device()
 
     def _make_listener(self, spec: str, source: str) -> HotkeyListener:
         return HotkeyListener(
@@ -112,9 +222,16 @@ class App:
         model_menu.addSeparator()
         group = QActionGroup(model_menu)
         group.setExclusive(True)
+        checked = False
         for label, spec in self.cfg.favorites.items():
             act = QAction(label, model_menu, checkable=True)
-            act.setChecked(spec == self.cfg.backend_model)
+            # Only ever pre-check one action. QActionGroup enforces exclusivity
+            # when an action is toggled, not when it is added: addAction just
+            # moves the group's current pointer, so two actions checked before
+            # they join the group both stay checked.
+            if not checked and spec == self.cfg.backend_model:
+                act.setChecked(True)
+                checked = True
             act.triggered.connect(lambda _=False, s=spec: self.switch_model(s))
             group.addAction(act)
             model_menu.addAction(act)
@@ -150,15 +267,44 @@ class App:
         self.ptt_action.triggered.connect(self.set_mode)
         hotkey_menu.addAction(self.ptt_action)
 
+        # Read-only presence line: without it, a device that failed to open is
+        # indistinguishable from one that is simply absent.
+        self.device_action = QAction("Codex Micro: not connected")
+        self.device_action.setEnabled(False)
+        hotkey_menu.addSeparator()
+        hotkey_menu.addAction(self.device_action)
+
         self.menu.addSeparator()
         open_cfg = self.menu.addAction("Open config file")
         open_cfg.triggered.connect(self.open_config)
         reload_cfg = self.menu.addAction("Reload config")
         reload_cfg.triggered.connect(self.reload_config)
+        self._add_update_actions()
         self.menu.addSeparator()
         quit_action = self.menu.addAction("Quit")
         quit_action.triggered.connect(self.quit)
         self._prime_menu_geometry()
+
+    def _add_update_actions(self) -> None:
+        """Bottom-of-menu update entry, rendered from the last check's result."""
+        if self._update_state == "checking":
+            checking = self.menu.addAction("Checking for updates…")
+            checking.setEnabled(False)
+            return
+        if self._update_state == "installing":
+            installing = self.menu.addAction("Updating…")
+            installing.setEnabled(False)
+            return
+        release = self._update_release
+        if release is not None and release.newer:
+            do_update = self.menu.addAction(f"Update now ({release.tag} available)")
+            do_update.triggered.connect(self.start_update)
+            return
+        if self._update_line:
+            line = self.menu.addAction(self._update_line)
+            line.setEnabled(False)
+        check = self.menu.addAction("Check for updates…")
+        check.triggered.connect(lambda: self.check_update(announce=True))
 
     def _prime_menu_geometry(self) -> None:
         """Work around Qt choosing a submenu's popup side from an uncomputed
@@ -198,10 +344,20 @@ class App:
             self.unload_action.setEnabled(True)
         mode_label = "push-to-talk" if self.cfg.mode == "hold" else "toggle"
         paste_line = f"\npaste hotkey: {self.cfg.paste_hotkey}" if self.cfg.paste_hotkey else ""
+        device_line = (
+            f"\nCodex Micro: {self.cfg.codex_micro.trigger_key}" if self.device_path else ""
+        )
         self.tray.setToolTip(
             f"voice-to-clipboard ({self.cfg.hotkey}, {mode_label})\n"
-            f"{self.cfg.backend}:{self.cfg.model} — {status}{paste_line}"
+            f"{self.cfg.backend}:{self.cfg.model} — {status}{paste_line}{device_line}"
         )
+        if getattr(self, "device_action", None) is not None:
+            self.device_action.setText(
+                f"Codex Micro: {self.cfg.codex_micro.trigger_key}"
+                if self.device_path
+                else "Codex Micro: not connected"
+            )
+        self._update_device()
 
     # ---------- state machine ----------
 
@@ -374,8 +530,14 @@ class App:
         self._leaderboard_dialog.activateWindow()
 
     def _use_leaderboard_model(self, candidate) -> None:
-        label = candidate.model_id.rsplit("/", 1)[-1]
-        self.cfg.favorites.setdefault(label, candidate.spec)
+        # Favorites are keyed by label but identified by spec, so dedupe on the
+        # spec: a second label for a model we already list would show up twice
+        # in the Model menu and shift every later Codex Micro key mapping.
+        if candidate.spec not in self.cfg.favorites.values():
+            label = candidate.model_id.rsplit("/", 1)[-1]
+            if self.cfg.favorites.get(label, candidate.spec) != candidate.spec:
+                label = candidate.model_id  # same short name, different repo
+            self.cfg.favorites[label] = candidate.spec
         self.switch_model(candidate.spec)  # sets backend/model, saves, loads
         self._build_menu()
         self.notify(
@@ -383,6 +545,92 @@ class App:
             f"{candidate.model_id} ({candidate.wer:.2f}% WER) — downloading on "
             "first use; watch the Model menu status",
         )
+
+    # ---------- updates ----------
+
+    def check_update(self, announce: bool = False) -> None:
+        """Ask GitHub for the latest release.
+
+        ``announce`` also reports "up to date" and failures; the automatic
+        startup check stays silent unless there is actually an update.
+        """
+        if self._update_state != "idle":
+            return
+        self._update_state = "checking"
+        self._update_announce = announce
+        self._build_menu()
+
+        def work() -> None:
+            try:
+                self.bridge.update_checked.emit(update.check_latest(__version__))
+            except Exception as e:
+                log.exception("update check failed")
+                self.bridge.update_checked.emit(str(e))
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def on_update_checked(self, result: object) -> None:
+        self._update_state = "idle"
+        announce, self._update_announce = self._update_announce, False
+        if isinstance(result, str):
+            self._update_release = None
+            self._update_line = "Update check failed"
+            self._build_menu()
+            if announce:
+                self.notify("Update check failed", result, error=True)
+            return
+        self._update_release = result
+        if result is None:
+            self._update_line = f"No releases published yet (v{__version__})"
+        elif result.newer:
+            self._update_line = ""  # the action itself carries the news
+        else:
+            self._update_line = f"Up to date (v{__version__})"
+        self._build_menu()
+        if result is not None and result.newer:
+            self.notify(
+                "Update available",
+                f'{result.name} — choose "Update now" in the tray menu (running {__version__})',
+            )
+        elif announce:
+            self.notify("Up to date", f"voice-to-clipboard {__version__} is the latest release")
+
+    def start_update(self) -> None:
+        release = self._update_release
+        if self._update_state != "idle" or release is None or not release.newer:
+            return
+        self._update_state = "installing"
+        self._build_menu()
+        self.notify("Updating", f"Fetching {release.tag} from GitHub…")
+
+        def work() -> None:
+            ok = False
+            try:
+                ok = update.run_update(release, self._emit_update_status)
+            except Exception as e:  # run_update guards itself; this is the net
+                log.exception("update failed")
+                self._emit_update_status("Update failed", str(e), True)
+            finally:
+                self.bridge.update_finished.emit(ok)
+
+        threading.Thread(target=work, daemon=True).start()
+
+    def _emit_update_status(self, title: str, message: str, error: bool) -> None:
+        """Worker-thread callback for update.run_update progress."""
+        self.bridge.update_status.emit((title, message, error))
+
+    def on_update_status(self, payload: object) -> None:
+        title, message, error = payload
+        self.notify(title, message, error=error)
+
+    def on_update_finished(self, ok: bool) -> None:
+        self._update_state = "idle"
+        if ok and self._update_release is not None:
+            # The restart usually kills us before this shows, but not when the
+            # app isn't running under systemd.
+            self._update_line = f"Updated to {self._update_release.tag} — restart to apply"
+            self._update_release = None
+        self._build_menu()
 
     # ---------- hotkey capture ----------
 
@@ -486,6 +734,8 @@ class App:
         self.cfg = config.load()
         if (self.cfg.hotkey, self.cfg.paste_hotkey) != (old.hotkey, old.paste_hotkey):
             self._restart_listeners()
+        if self.cfg.codex_micro != old.codex_micro:
+            self._start_device()
         self._build_menu()
         if self.cfg.backend_model != old.backend_model:
             self._load_model_async()
@@ -500,6 +750,8 @@ class App:
     def quit(self) -> None:
         if self.capture is not None:
             self.capture.cancel()
+        if self.device is not None:
+            self.device.stop()  # blanks the keypad LEDs on the way out
         sounds.stop_drone()
         self.listener.stop()
         if self.paste_listener is not None:
@@ -628,6 +880,15 @@ def main() -> int:
         candidates = leaderboard.fetch_ranked()
         hw = leaderboard.detect_hardware()
         print(leaderboard.format_table(candidates, cfg.backend_model, hw))
+        return 0
+    if "--check-update" in sys.argv:
+        release = update.check_latest(__version__)
+        if release is None:
+            print(f"voice-to-clipboard {__version__}: no releases published yet")
+        elif release.newer:
+            print(f"update available: {release.tag} (running {__version__}) {release.url}")
+        else:
+            print(f"voice-to-clipboard {__version__} is up to date (latest {release.tag})")
         return 0
     if "--install-service" in sys.argv:
         from . import service

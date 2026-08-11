@@ -1,6 +1,6 @@
 [project]
 name = "voice-to-clipboard"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local GPU dictation for Linux: hotkey or mouse button -> speech-to-text -> clipboard or typed into the focused window"
 readme = "README.md"
 license = { text = "MIT" }
