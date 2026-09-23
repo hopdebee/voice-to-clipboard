@@ -5,7 +5,7 @@ Methodology (kept deliberately identical to re-running the analysis by hand):
 - Data source: ``english_short_latest.csv`` from the
   ``hf-audio/open-asr-leaderboard-results`` dataset — the exact file the
   leaderboard Space renders, so ranks match the public UI. Ranking metric is
-  "avg cleaned" WER over the leaderboard's standard English test-set suite.
+  "avg" (cleaned) WER over the leaderboard's standard English test-set suite.
   All models are scored on the same datasets; nothing from other leaderboards
   is mixed in.
 - A model is only marked runnable if it can load through one of our backends
@@ -144,13 +144,21 @@ def _classify(model_id: str, license_name: str) -> tuple[str | None, str]:
 
 def fetch_ranked(top_n: int | None = None) -> list[Candidate]:
     """Leaderboard entries by avg cleaned WER, classified for our backends."""
-    rows = list(csv.DictReader(io.StringIO(_fetch(RESULTS_URL).decode())))
+    reader = csv.DictReader(io.StringIO(_fetch(RESULTS_URL).decode()))
+    # The results CSV renamed "avg cleaned" to "avg" in Aug 2026 (same metric:
+    # mean of the cleaned per-dataset WERs). Accept either.
+    fields = reader.fieldnames or []
+    wer_col = next((c for c in ("avg cleaned", "avg") if c in fields), None)
+    if wer_col is None:
+        raise RuntimeError(f"leaderboard CSV has no average-WER column (columns: {fields})")
     scored = []
-    for row in rows:
+    for row in reader:
         try:
-            scored.append((float(row["avg cleaned"]), row))
+            scored.append((float(row[wer_col]), row))
         except (KeyError, ValueError):
             continue
+    if not scored:
+        raise RuntimeError(f"leaderboard CSV had no parseable '{wer_col}' values")
     scored.sort(key=lambda pair: pair[0])
     if top_n is not None:
         scored = scored[:top_n]
