@@ -1,0 +1,4 @@
+# CPU-only dictation; the upstream GUI/CUDA dependencies are unnecessary here.
+faster-whisper==1.2.1
+sounddevice==0.5.6
+numpy>=1.26,<3

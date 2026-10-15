@@ -1,5 +1,8 @@
 # voice-to-clipboard
 
+**Local AutoKey integration:** see [DICTATION.md](DICTATION.md) for F8 dictation
+and F9 hovered file-path insertion using `talk_and_path.py`.
+
 Local, GPU-accelerated dictation for Linux: press a hotkey (or mouse button),
 talk, and the transcription lands on your clipboard — or is typed straight
 into the text box you're focused on. Runs entirely on your machine with a
