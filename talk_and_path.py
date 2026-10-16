@@ -31,6 +31,8 @@ DEFAULT_CONFIG = {
     "language": None, "max_seconds": 180, "auto_paste": True,
     "copy_path_shortcut": "ctrl+alt+shift+p",
     "focus_codex_shortcut": "ctrl+alt+shift+i",
+    "hotwords_file": None,
+    "hotwords_priority": [],
 }
 LOG = logging.getLogger("talk-and-path")
 
@@ -41,6 +43,37 @@ def load_config():
     if path.exists():
         config.update(json.loads(path.read_text()))
     return config
+
+
+def load_hotwords(config, model):
+    """Read complete terms and fit the model's hint budget without silent truncation."""
+    filename = config.get("hotwords_file")
+    result = {"file": filename, "loaded": 0, "active": 0, "omitted": 0,
+              "tokens": 0, "token_limit": 0, "text": None, "error": None}
+    if not filename:
+        return result
+    path = Path(filename).expanduser()
+    if not path.is_absolute():
+        path = CONFIG_DIR / path
+    result["file"] = str(path)
+    terms = list(dict.fromkeys(line.strip() for line in path.read_text(encoding="utf-8-sig").splitlines()
+                              if line.strip() and not line.lstrip().startswith("#")))
+    priority = config.get("hotwords_priority", [])
+    if not isinstance(priority, list) or any(not isinstance(term, str) for term in priority):
+        raise ValueError("hotwords_priority must be a list of strings")
+    ordered = list(dict.fromkeys([term for term in priority if term in terms] + terms))
+    # faster-whisper truncates at half the decoder's context. Fit whole terms first.
+    limit = model.max_length // 2 - 1
+    selected, token_count = [], 0
+    for term in ordered:
+        candidate = ", ".join(selected + [term])
+        count = len(model.hf_tokenizer.encode(" " + candidate, add_special_tokens=False).ids)
+        if count <= limit:
+            selected.append(term)
+            token_count = count
+    result.update(loaded=len(terms), active=len(selected), omitted=len(terms) - len(selected),
+                  tokens=token_count, token_limit=limit, text=", ".join(selected) or None)
+    return result
 
 
 def run(args, **kwargs):
@@ -145,14 +178,32 @@ class DictationService:
         self.closed = False
         self.last_error = None
         self.last_toggle = 0.0
+        self.hotword_hints = {"file": config.get("hotwords_file"), "loaded": 0, "active": 0,
+                              "omitted": 0, "tokens": 0, "token_limit": 0,
+                              "text": None, "error": None}
+
+    def refresh_hotwords(self):
+        try:
+            self.hotword_hints = load_hotwords(self.config, self.model)
+        except (OSError, UnicodeError, ValueError) as exc:
+            self.hotword_hints = {"file": self.config.get("hotwords_file"), "loaded": 0,
+                                  "active": 0, "omitted": 0, "tokens": 0, "token_limit": 0,
+                                  "text": None, "error": str(exc)}
+            notify("Glossary unavailable; transcribing without vocabulary hints. Check service status.")
+        hints = self.hotword_hints
+        if hints["file"] and not hints["error"]:
+            LOG.info("Glossary: %s/%s terms active, %s/%s hint tokens",
+                     hints["active"], hints["loaded"], hints["tokens"], hints["token_limit"])
 
     def warmup(self):
         try:
             self.model = make_model(self.config)
+            self.refresh_hotwords()
             with self.lock:
                 if not self.closed:
                     self.state = "idle"
-            notify("Ready. F8: record/finish. F9: insert hovered Explorer path.")
+            glossary = f" Glossary: {self.hotword_hints['active']} terms." if self.hotword_hints["active"] else ""
+            notify("Ready. F8: record/finish. F9: insert hovered Explorer path." + glossary)
         except Exception as exc:
             LOG.exception("Model loading failed")
             with self.lock:
@@ -174,6 +225,7 @@ class DictationService:
         with self.lock:
             if self.state != "idle":
                 raise RuntimeError(f"Cannot record while {self.state}; wait for Ready.")
+            self.refresh_hotwords()
             self.origin = active_window()
             self.origin_is_code = is_code_window(self.origin)
             self.chunks, self.events = [], []
@@ -268,8 +320,12 @@ class DictationService:
         try:
             clipboard_set(sentinel)
             run(["xdotool", "windowactivate", "--sync", window])
-            run(["xdotool", "click", "1"])
-            time.sleep(0.12)
+            # Explorer's context-menu selection highlights the hovered row without
+            # firing the normal click handler that opens an editor preview.
+            run(["xdotool", "click", "3"])
+            time.sleep(0.15)
+            send_hotkey("Escape")
+            time.sleep(0.08)
             send_hotkey(self.config["copy_path_shortcut"])
             deadline = time.monotonic() + 1.5
             while time.monotonic() < deadline:
@@ -302,7 +358,8 @@ class DictationService:
             if len(audio) < 1600:
                 raise RuntimeError("Recording too short; speak for at least a moment.")
             segments, info = self.model.transcribe(audio, language=self.config["language"],
-                                                   word_timestamps=True, vad_filter=True)
+                                                   word_timestamps=True, vad_filter=True,
+                                                   hotwords=self.hotword_hints["text"])
             segments = list(segments)
             text = merge_paths_into_transcript(segments, events)
             with self.lock:
@@ -343,7 +400,9 @@ class DictationService:
         if command == "status":
             with self.lock:
                 return {"state": self.state, "model": self.config["model"],
-                        "paths": len(self.events), "last_error": self.last_error}
+                        "paths": len(self.events), "last_error": self.last_error,
+                        "hotwords": {key: value for key, value in self.hotword_hints.items()
+                                     if key != "text"}}
         if command == "toggle":
             self.toggle()
         elif command == "path":
@@ -477,8 +536,11 @@ def main():
         elif args.command == "transcribe-file":
             if not args.audio_file:
                 parser.error("transcribe-file requires an audio file")
-            segments, _ = make_model(config).transcribe(args.audio_file, language=config["language"],
-                                                       word_timestamps=True, vad_filter=True)
+            model = make_model(config)
+            hints = load_hotwords(config, model)
+            segments, _ = model.transcribe(args.audio_file, language=config["language"],
+                                           word_timestamps=True, vad_filter=True,
+                                           hotwords=hints["text"])
             print(merge_paths_into_transcript(list(segments), []))
         else:
             print(json.dumps(send_command(args.command)))

@@ -11,8 +11,10 @@ Hugging Face. The upstream GUI and its CUDA/PyTorch dependencies are unnecessary
 1. Put the cursor in the Codex prompt, or another application's text input.
 2. **Press F8** to begin. A desktop notification confirms recording.
 3. Speak. To mention a file, hover over its row in the **VS Code Explorer** and
-   **press F9**. The script selects the row and copies its full absolute path, then
-   restores your previous text clipboard. You can capture several paths.
+   **press F9**. The script highlights the row without opening the file, copies
+   its full absolute path, and restores your previous text clipboard. A
+   “Path inserted: filename” notification confirms capture. The context menu
+   briefly appears and closes automatically. You can capture several paths.
 4. **Press F8 again** to finish. Whisper transcribes locally, and the paths are
    inserted as Markdown code at the corresponding points in your speech.
 5. The result is copied and pasted. In VS Code, the Codex input is focused first.
@@ -57,6 +59,33 @@ clipboard-only delivery. Restart the service after changing settings:
 ```bash
 systemctl --user restart talk-and-path.service
 ```
+
+### Vocabulary hints
+
+Whisper now reads the aaabphd glossary from
+`/home/heopd/aaabphd/dictation_glossary.candidate.txt`. It supplies the selected
+entries through faster-whisper's `hotwords` argument for both dictation and
+`transcribe-file`. This selected glossary applies to all recordings; workspace
+detection is not configured.
+
+The file contains one term or phrase per line. Spelling and capitals are
+preserved, including `gene`, `genes`, `NON`, `UP`, `DOWN`, `ABA-DL`, and
+`ABA-DL pipeline`. Blank lines and lines starting with `#` are ignored. The file
+is reread before each recording, so editing its entries needs no service restart.
+
+Whisper `small` accepts up to 223 hint tokens. The complete 116-term glossary is
+larger than that, so the configured 37-term starter selection takes priority,
+then additional complete terms are fitted in file order. Currently 49 terms fit;
+67 remain outside the active hint list. No term is cut halfway through. Status
+reports the loaded and active counts, omitted count, and token usage. These hints
+encourage terminology and casing but do not force exact transcriptions.
+
+The configuration keys are `hotwords_file` (the source path) and
+`hotwords_priority` (an ordered list of preferred entries already in that file).
+Change the priority list when your topic changes, then restart the service.
+Set `hotwords_file` to `null` and restart to disable vocabulary hints. If the file
+cannot be read, a notification and status error identify the problem and
+dictation continues without hints.
 
 Installed integration files:
 

@@ -3,7 +3,7 @@ from pathlib import Path
 from types import SimpleNamespace
 import tempfile
 import unittest
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import talk_and_path as app
 from scripts.install_dictation import install_editor_bindings
@@ -64,6 +64,18 @@ class ServiceTests(unittest.TestCase):
             self.service.process_recording([np.zeros((16000, 1), dtype=np.float32)], [], "1", True, "old-session")
         clipboard.assert_not_called()
 
+    def test_transcription_receives_cased_hotwords_and_keeps_timestamps(self):
+        import numpy as np
+        self.service.hotword_hints["text"] = "gene, genes, NON, UP, DOWN, ABA-DL, ABA-DL pipeline"
+        self.model.transcribe = Mock(return_value=([], SimpleNamespace(language="en")))
+        # Suppress delivery after decoding, so this check does not touch the desktop.
+        self.service.recording_id = None
+        self.service.process_recording([np.zeros((16000, 1), dtype=np.float32)], [], "1", True, "cancelled")
+        options = self.model.transcribe.call_args.kwargs
+        self.assertEqual(options["hotwords"], self.service.hotword_hints["text"])
+        self.assertTrue(options["word_timestamps"])
+        self.assertTrue(options["vad_filter"])
+
     def test_focus_change_keeps_transcript_on_clipboard_without_paste(self):
         import numpy as np
         self.service.recording_id = "session"
@@ -91,6 +103,57 @@ class ServiceTests(unittest.TestCase):
                 self.service.capture_hovered_path(1)
         self.assertEqual(clipboard.call_args.args, ("original clipboard",))
         self.assertEqual(self.service.events, [])
+
+
+class HotwordTests(unittest.TestCase):
+    def setUp(self):
+        # A deterministic character tokenizer exercises limits without loading Whisper.
+        self.model = SimpleNamespace(max_length=448,
+            hf_tokenizer=SimpleNamespace(encode=lambda text, **kw: SimpleNamespace(ids=list(text))))
+
+    def test_disabled_glossary_does_not_require_a_model(self):
+        result = app.load_hotwords(dict(app.DEFAULT_CONFIG), None)
+        self.assertIsNone(result["text"])
+        self.assertEqual(result["active"], 0)
+
+    def test_bom_comments_duplicates_phrases_and_case(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "words.txt"
+            path.write_text("\ufeff# project\ngene\ngenes\nNON\nUP\nDOWN\nABA-DL\nABA-DL pipeline\ngene\n\n")
+            result = app.load_hotwords({"hotwords_file": str(path)}, self.model)
+        self.assertEqual(result["loaded"], 7)
+        self.assertEqual(result["text"], "gene, genes, NON, UP, DOWN, ABA-DL, ABA-DL pipeline")
+
+    def test_priority_terms_fit_first_and_oversized_terms_are_not_split(self):
+        self.model.max_length = 30
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "words.txt"
+            path.write_text("oversized-word-that-will-not-fit\ngene\nNON\nUP\n")
+            result = app.load_hotwords({"hotwords_file": str(path),
+                                       "hotwords_priority": ["NON", "UP"]}, self.model)
+        self.assertEqual(result["text"], "NON, UP, gene")
+        self.assertEqual(result["loaded"], 4)
+        self.assertEqual(result["omitted"], 1)
+        self.assertLessEqual(result["tokens"], result["token_limit"])
+
+    def test_glossary_edits_are_read_again(self):
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / "words.txt"
+            path.write_text("gene\n")
+            config = {"hotwords_file": str(path)}
+            self.assertEqual(app.load_hotwords(config, self.model)["text"], "gene")
+            path.write_text("gene\nABA-DL pipeline\n")
+            self.assertEqual(app.load_hotwords(config, self.model)["text"], "gene, ABA-DL pipeline")
+
+    def test_unreadable_glossary_preserves_dictation_with_visible_error(self):
+        service = app.DictationService({**app.DEFAULT_CONFIG,
+                                       "hotwords_file": "/nonexistent/talk-and-path/words.txt"},
+                                      model=self.model)
+        with patch.object(app, "notify") as notification:
+            service.refresh_hotwords()
+        self.assertIsNone(service.hotword_hints["text"])
+        self.assertIsNotNone(service.dispatch("status")["hotwords"]["error"])
+        notification.assert_called_once()
 
 
 class InstallerTests(unittest.TestCase):
