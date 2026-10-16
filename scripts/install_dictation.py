@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
 """Install the local AutoKey integration without replacing existing shortcuts."""
+
 from __future__ import annotations
 
 import argparse
-from datetime import datetime
 import json
 import os
-from pathlib import Path
 import shutil
 import subprocess
 import sys
+from datetime import datetime
+from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 CONFIG = Path(os.environ.get("XDG_CONFIG_HOME", Path.home() / ".config"))
@@ -69,7 +70,7 @@ def install_editor_bindings(path):
         raise ValueError(f"Expected a JSONC array in {path}")
     # Remove trailing commas only outside strings; JSONC values can contain ',]'.
     for index, char in enumerate(structural):
-        if char == "," and structural[index + 1:].lstrip().startswith(("}", "]")):
+        if char == "," and structural[index + 1 :].lstrip().startswith(("}", "]")):
             clean[index] = " "
     parsed = json.loads("".join(clean))
     additions = []
@@ -83,7 +84,7 @@ def install_editor_bindings(path):
             additions.append(binding)
     if not additions:
         return
-    before = structural[start + 1:end].rstrip()
+    before = structural[start + 1 : end].rstrip()
     inserted = ",\n".join(json.dumps(item, indent=4) for item in additions)
     prefix = original[:end]
     if before and not before.endswith(","):
@@ -97,102 +98,83 @@ def install_editor_bindings(path):
 
 
 def autokey_script(command, key):
-    # Lock until physical key release: X11 auto-repeat must not toggle recording.
-    invocation = [str(ROOT / ".venv-dictation/bin/python"), str(ROOT / "talk_and_path.py"), command]
-    return f'''# Installed by {ROOT}/scripts/install_dictation.py
-import fcntl
-import os
-from pathlib import Path
-import subprocess
-import time
-from Xlib import display, XK
+    sys.path.insert(0, str(ROOT))
+    from dictation_settings import autokey_script as generate
 
-lock_path = Path(os.environ.get("XDG_RUNTIME_DIR", "/tmp")) / "talk-and-path-autokey-{command}.lock"
-with lock_path.open("w") as lock_file:
-    try:
-        fcntl.flock(lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
-    except BlockingIOError:
-        pass
-    else:
-        subprocess.run({invocation!r}, timeout=10, check=False)
-        connection = display.Display()
-        try:
-            code = connection.keysym_to_keycode(XK.string_to_keysym({key!r}))
-            while connection.query_keymap()[code // 8] & (1 << (code % 8)):
-                time.sleep(0.025)
-        finally:
-            connection.close()
-'''
+    return generate(command, key)
 
 
 def install_autokey():
-    root = CONFIG / "autokey/data"
-    if not root.is_dir():
-        raise RuntimeError(f"AutoKey data directory not found: {root}")
-    destination = root / "Talk and Path"
-    actions = [("Dictation - Start or finish", "toggle", "<f8>", [], "F8"),
-               ("Dictation - Insert hovered path", "path", "<f9>", [], "F9"),
-               ("Dictation - Cancel", "cancel", "<f8>", ["<shift>"], "F8")]
-    for metadata in root.rglob(".*.json"):
-        if destination in metadata.parents:
-            continue
-        entry = json.loads(metadata.read_text())
-        hotkey = entry.get("hotkey", {})
-        for _, _, key, modifiers, _ in actions:
-            if 3 in entry.get("modes", []) and hotkey.get("hotKey") == key and sorted(hotkey.get("modifiers", [])) == sorted(modifiers):
-                raise RuntimeError(f"AutoKey shortcut already used by {metadata}")
-    destination.mkdir(exist_ok=True)
-    folder = {"type": "folder", "title": "Talk and Path", "modes": [], "usageCount": 0,
-              "showInTrayMenu": True, "hotkey": {"hotKey": None, "modifiers": []},
-              "filter": {"regex": None, "isRecursive": False},
-              "abbreviation": {"wordChars": "[\\w]", "abbreviations": [], "immediate": False,
-                               "ignoreCase": False, "backspace": True, "triggerInside": False}}
-    (destination / ".folder.json").write_text(json.dumps(folder, indent=4))
-    for title, command, key, modifiers, xkey in actions:
-        metadata = {**folder, "type": "script", "description": title, "modes": [3],
-                    "omitTrigger": False, "prompt": False, "store": {},
-                    "hotkey": {"hotKey": key, "modifiers": modifiers}}
-        metadata.pop("title", None)
-        # Write metadata first; AutoKey watches the subsequent .py create event.
-        (destination / f".{title}.json").write_text(json.dumps(metadata, indent=4))
-        (destination / f"{title}.py").write_text(autokey_script(command, xkey))
+    sys.path.insert(0, str(ROOT))
+    from dictation_settings import autokey_files, commit_files, load_config
+
+    commit_files(autokey_files(load_config(), CONFIG / "autokey/data"))
 
 
 def install_service():
     executable = ROOT / ".venv-dictation/bin/python"
     unit = CONFIG / "systemd/user/talk-and-path.service"
     unit.parent.mkdir(parents=True, exist_ok=True)
-    quote = lambda value: '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
-    unit.write_text(f'''[Unit]
+
+    def quote(value):
+        return '"' + str(value).replace("\\", "\\\\").replace('"', '\\"').replace("%", "%%") + '"'
+
+    unit.write_text(f"""[Unit]
 Description=Local Whisper dictation with hovered file paths
 After=graphical-session.target
 PartOf=graphical-session.target
 
 [Service]
 Type=simple
-ExecStart={quote(executable)} {quote(ROOT / 'talk_and_path.py')} serve
+ExecStart={quote(executable)} {quote(ROOT / "talk_and_path.py")} serve
 Restart=on-failure
 RestartSec=3
 Environment=PYTHONUNBUFFERED=1
 UMask=0077
-''')
+""")
+    tray_unit = CONFIG / "systemd/user/talk-and-path-tray.service"
+    tray_unit.write_text(f"""[Unit]
+Description=Talk and Path MATE panel icon
+After=graphical-session.target
+PartOf=graphical-session.target
+
+[Service]
+Type=simple
+ExecStart=/usr/bin/python3 {quote(ROOT / "tray_app.py")} --background
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+UMask=0077
+""")
     launcher = Path.home() / ".local/bin/talk-and-path-session"
     launcher.parent.mkdir(parents=True, exist_ok=True)
-    launcher.write_text('''#!/bin/sh
+    launcher.write_text("""#!/bin/sh
 # Import the actual desktop environment after X11 login (also works on MATE).
 systemctl --user import-environment DISPLAY XAUTHORITY XDG_SESSION_TYPE XDG_CURRENT_DESKTOP
-exec systemctl --user start talk-and-path.service
-''')
+exec systemctl --user start talk-and-path.service talk-and-path-tray.service
+""")
     launcher.chmod(0o755)
+    from dictation_settings import load_config, startup_entry
+
     autostart = CONFIG / "autostart/talk-and-path.desktop"
     autostart.parent.mkdir(parents=True, exist_ok=True)
-    autostart.write_text(f'''[Desktop Entry]
+    autostart.write_bytes(startup_entry(load_config()["start_at_login"]))
+    control = launcher.parent / "talk-and-path"
+    control.write_text(f"""#!/bin/sh
+systemctl --user start talk-and-path-tray.service
+exec /usr/bin/python3 {quote(ROOT / "tray_app.py")} --settings
+""")
+    control.chmod(0o755)
+    applications = Path.home() / ".local/share/applications"
+    applications.mkdir(parents=True, exist_ok=True)
+    (applications / "talk-and-path.desktop").write_text(f'''[Desktop Entry]
 Type=Application
-Name=Talk and Path dictation
-Comment=Local voice dictation controlled by AutoKey F8 and F9
-Exec="{launcher}"
+Name=Talk and Path
+Comment=Local voice dictation settings
+Exec="{control}"
+Icon={ROOT / "assets/tray/talk-and-path-ready.svg"}
 Terminal=false
-X-GNOME-Autostart-enabled=true
+Categories=Utility;Accessibility;
 ''')
     subprocess.run(["systemctl", "--user", "daemon-reload"], check=True)
     subprocess.run([str(launcher)], check=True)
@@ -207,16 +189,30 @@ def main():
         if not uv:
             raise SystemExit("Install uv first: https://docs.astral.sh/uv/")
         if not (ROOT / ".venv-dictation/bin/python").exists():
-            subprocess.run([uv, "venv", "--python", "3.10", str(ROOT / ".venv-dictation")], check=True)
-        subprocess.run([uv, "pip", "install", "--python", str(ROOT / ".venv-dictation/bin/python"),
-                        "-r", str(ROOT / "requirements-dictation.txt")], check=True)
+            subprocess.run(
+                [uv, "venv", "--python", "3.10", str(ROOT / ".venv-dictation")], check=True
+            )
+        subprocess.run(
+            [
+                uv,
+                "pip",
+                "install",
+                "--python",
+                str(ROOT / ".venv-dictation/bin/python"),
+                "-r",
+                str(ROOT / "requirements-dictation.txt"),
+            ],
+            check=True,
+        )
     config_dir = CONFIG / "talk-and-path"
     config_dir.mkdir(parents=True, exist_ok=True)
     sys.path.insert(0, str(ROOT))
-    from talk_and_path import DEFAULT_CONFIG
+    from dictation_settings import atomic_write, load_config
+
     config_path = config_dir / "config.json"
-    if not config_path.exists():
-        config_path.write_text(json.dumps(DEFAULT_CONFIG, indent=2) + "\n")
+    if config_path.exists():
+        backup(config_path)
+    atomic_write(config_path, (json.dumps(load_config(), indent=2) + "\n").encode())
     for editor in ("Code", "Code - Insiders"):
         user = CONFIG / editor / "User"
         if user.is_dir():
@@ -228,7 +224,7 @@ def main():
                         install_editor_bindings(profile / "keybindings.json")
     install_autokey()
     install_service()
-    print("Installed. F8: start/finish, F9: hovered Explorer path, Shift+F8: cancel.")
+    print("Installed Talk and Path panel icon, settings and AutoKey integration.")
 
 
 if __name__ == "__main__":

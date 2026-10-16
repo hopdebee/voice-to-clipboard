@@ -1,5 +1,40 @@
 # Voice dictation with hovered file paths
 
+## Panel icon and settings
+
+Talk and Path now has a microphone icon in the MATE panel. Click it for recording,
+cancel, pause/resume, transcript review, and service controls. The icon changes
+shape and colour while recording, transcribing, loading, paused, or unavailable;
+recording also shows an elapsed-time label.
+
+Choose **Settings…** to configure:
+
+- Start/finish, path-capture, and cancel shortcuts, with a Capture button and
+  checks against existing AutoKey assignments.
+- The glossary file, editable terms, priorities, ordering, and the actual
+  Active / Outside hint limit selection.
+- The input microphone, an eight-second level test, language, recording duration,
+  clipboard/paste delivery, and desktop notifications.
+- Local model, CPU threads, and startup at login.
+
+You can also open Settings from the application menu's **Talk and Path** entry or
+run `~/.local/bin/talk-and-path`. Opening Settings does not load a second Whisper
+model. Saving unrelated preferences keeps the loaded model; changes that would
+interrupt recording or transcription wait until the current operation finishes.
+Vocabulary preview uses the running model's tokenizer. Changing the model may
+require a first-use download; the panel shows loading until it is ready.
+
+Pause prevents new recordings while leaving finish/cancel available for an
+existing recording. It does not pause your other AutoKey macros. **Quit panel
+icon** closes only the interface. **Stop dictation service** waits for any active
+operation to finish and stops the backend; the panel offers Start to bring it back.
+Using a recording hotkey can also explicitly start the backend again.
+
+The glossary and configuration are backed up before settings are saved. Failed
+multi-file saves restore the previous configuration, vocabulary, and AutoKey
+entries. The most recent transcript can be reviewed and copied; it is never sent
+automatically.
+
 This integration runs `talk_and_path.py` as a background user service and uses
 your existing AutoKey installation. Transcription uses local faster-whisper
 `small`, CPU INT8, with no API key or transcription charges. The model downloads
@@ -47,7 +82,8 @@ python3 scripts/install_dictation.py
 ```
 
 Required system packages: `autokey-gtk`, `xdotool`, `xclip`, `x11-utils` (xprop),
-`libportaudio2`, `libnotify-bin`, and `python3-xlib`. These were already present.
+`libportaudio2`, `libnotify-bin`, `python3-xlib`, `python3-gi`, `gir1.2-gtk-3.0`,
+and `gir1.2-ayatanaappindicator3-0.1`. These were already present.
 Python dependencies are isolated in `.venv-dictation` and listed in
 `requirements-dictation.txt`; the installer uses `uv`.
 
@@ -73,17 +109,18 @@ preserved, including `gene`, `genes`, `NON`, `UP`, `DOWN`, `ABA-DL`, and
 `ABA-DL pipeline`. Blank lines and lines starting with `#` are ignored. The file
 is reread before each recording, so editing its entries needs no service restart.
 
-Whisper `small` accepts up to 223 hint tokens. The complete 116-term glossary is
-larger than that, so the configured 37-term starter selection takes priority,
-then additional complete terms are fitted in file order. Currently 49 terms fit;
-67 remain outside the active hint list. No term is cut halfway through. Status
+Whisper `small` accepts up to 223 hint tokens. If the complete glossary is larger
+than that, the configured priority selection takes precedence, then additional
+complete terms are fitted in file order. Settings and status show the current
+active and omitted counts. No term is cut halfway through. Status
 reports the loaded and active counts, omitted count, and token usage. These hints
 encourage terminology and casing but do not force exact transcriptions.
 
 The configuration keys are `hotwords_file` (the source path) and
 `hotwords_priority` (an ordered list of preferred entries already in that file).
-Change the priority list when your topic changes, then restart the service.
-Set `hotwords_file` to `null` and restart to disable vocabulary hints. If the file
+Use Settings to change priorities or disable vocabulary hints without manually
+restarting. If editing configuration JSON directly, restart the service afterward.
+Set `hotwords_file` to `null` to disable vocabulary hints. If the file
 cannot be read, a notification and status error identify the problem and
 dictation continues without hints.
 
@@ -93,6 +130,7 @@ Installed integration files:
 - VS Code and Insiders keybindings: Ctrl+Alt+Shift+P → Copy Path (absolute)
   (Explorer only), Ctrl+Alt+Shift+I → Open Codex Sidebar.
 - Service: `~/.config/systemd/user/talk-and-path.service`.
+- Panel frontend: `~/.config/systemd/user/talk-and-path-tray.service`.
 - Desktop login startup: `~/.config/autostart/talk-and-path.desktop`, using
   `~/.local/bin/talk-and-path-session` to import the X11 environment.
 - Backups of the original prototype and modified keybindings:
@@ -110,8 +148,8 @@ shows the service paused, unpause it before trying F8.
 journalctl --user -u talk-and-path.service -n 30
 ```
 
-Microphone capture uses the default system input. Select the desired microphone
-in the desktop sound settings. For a transcription-only check of an audio file:
+Microphone capture uses the input selected in Settings, or the system default.
+For a transcription-only check of an audio file:
 
 ```bash
 .venv-dictation/bin/python talk_and_path.py transcribe-file recording.wav
@@ -129,7 +167,7 @@ the AutoKey `Talk and Path` folder. Remove the two added editor bindings if you
 no longer need them:
 
 ```bash
-systemctl --user stop talk-and-path.service
+systemctl --user stop talk-and-path.service talk-and-path-tray.service
 rm ~/.config/autostart/talk-and-path.desktop
 ```
 
@@ -137,9 +175,12 @@ rm ~/.config/autostart/talk-and-path.desktop
 
 ```bash
 .venv-dictation/bin/python -m unittest discover -s tests -v
+sh tests/run_tray_smoke.sh
 ```
 
 The tests cover path ordering, pauses, cancellation, clipboard restoration,
-window changes, and preserving JSONC editor settings. Desktop verification also
+window changes, settings rollback, deferred saves, shortcut conflicts, microphone
+selection, vocabulary preview, and preserving JSONC editor settings. The GTK
+smoke check runs on an isolated X display and D-Bus session. Desktop verification also
 checks the real AutoKey F8/F9 bindings, microphone capture, and synthesized
 speech transcription and paste into a temporary text window.
